@@ -1,8 +1,10 @@
 name: weekly-crawl
 on:
   schedule:
-    - cron: "0 0 * * 1"   # 毎週月曜(UTC)。日本時間で月曜09:00
+    - cron: "0 0 * * 1"
   workflow_dispatch: {}
+permissions:
+  contents: write   # ← これを追加！
 jobs:
   run:
     runs-on: ubuntu-latest
