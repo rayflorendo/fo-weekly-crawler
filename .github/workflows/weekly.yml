@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
       - run: python scrape.py
       - run: |
           git config user.name "auto-bot"
