@@ -1,6 +1,2 @@
 requests
-beautifulsoup4
-readability-lxml
 html2text
-playwright
-trafilatura
