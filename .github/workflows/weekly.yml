@@ -1,0 +1,21 @@
+name: weekly-crawl
+on:
+  schedule:
+    - cron: "0 0 * * 1"   # 毎週月曜(UTC)。日本時間で月曜09:00
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python scrape.py
+      - run: |
+          git config user.name "auto-bot"
+          git config user.email "bot@example.com"
+          git add docs/data.jsonl
+          git commit -m "weekly refresh" || echo "no changes"
+          git push
