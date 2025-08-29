@@ -1,21 +1,27 @@
 name: weekly-crawl
 on:
   schedule:
-    - cron: "0 0 * * 1"
-  workflow_dispatch: {}
+    - cron: "0 0 * * 1"   # 毎週月曜(UTC) → JSTだと月曜09:00
+  workflow_dispatch: {}    # 手動実行ボタン
+
 permissions:
-  contents: write   # ← これを追加！
+  contents: write          # ← これ必須（git push で失敗しないため）
+
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+        with: { python-version: "3.11" }
+
+      # 依存を入れる
       - run: pip install -r requirements.txt
-      - run: python -m playwright install --with-deps chromium
+
+      # クロール＆変換
       - run: python scrape.py
+
+      # 生成物をコミット
       - run: |
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
