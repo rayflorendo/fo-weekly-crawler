@@ -1,29 +1,33 @@
-# URLを読み、本文だけ取り出して data.jsonl を作る
-import csv, json, time, requests, os
-from readability import Document
+import os, json, requests, time
 import html2text
 
-os.makedirs("docs", exist_ok=True)
-OUT = "docs/data.jsonl"
+URLS_PATH = "urls.csv"
+OUT_DIR = "docs"
+os.makedirs(OUT_DIR, exist_ok=True)
+OUT_FILE = os.path.join(OUT_DIR, "data.jsonl")
 
-def fetch(url):
-    res = requests.get(url, timeout=30, headers={"User-Agent":"Mozilla/5.0"})
-    res.raise_for_status()
-    doc = Document(res.text)
-    title = doc.short_title() or url
-    md = html2text.HTML2Text(); md.ignore_links=False; md.body_width=0
-    content = md.handle(doc.summary())
-    content = "\n".join([l.rstrip() for l in content.splitlines() if l.strip()])
-    return {"url":url, "title":title, "content":content[:200000]}
+def fetch_all_html(url: str) -> dict:
+    r = requests.get(url, timeout=40, headers={"User-Agent":"Mozilla/5.0"})
+    r.raise_for_status()
+    html = r.text
+    # HTMLをまるごとMarkdownに変換（見出し/リスト/リンク等も保持）
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.body_width = 0
+    md = h.handle(html)
+    return {"url": url, "title": url, "content": md}
 
-rows=[]
-for url in [u.strip() for u in open("urls.csv", encoding="utf-8") if u.strip()]:
-    try:
-        rows.append(fetch(url)); time.sleep(1)
-    except Exception as e:
-        rows.append({"url":url,"title":"(取得失敗)","content":str(e)})
+def main():
+    urls = [u.strip() for u in open(URLS_PATH, encoding="utf-8") if u.strip()]
+    rows = []
+    for url in urls:
+        print("fetch:", url)
+        rows.append(fetch_all_html(url))
+        time.sleep(1)  # 優しく
+    with open(OUT_FILE, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print("OK:", len(rows), "pages")
 
-with open(OUT,"w",encoding="utf-8") as f:
-    for r in rows: f.write(json.dumps(r, ensure_ascii=False)+"\n")
-
-print(f"OK: {len(rows)} pages -> {OUT}")
+if __name__ == "__main__":
+    main()
