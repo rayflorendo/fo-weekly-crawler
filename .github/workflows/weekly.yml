@@ -2,56 +2,55 @@ name: weekly-crawl
 
 on:
   schedule:
-    - cron: "0 0 * * 6"         # 毎週土曜 00:00 UTC = 土曜 09:00 JST
-  workflow_dispatch: {}          # 手動実行
+    - cron: '0 0 * * 6'     # 毎週土曜 00:00 UTC = 土曜 09:00 JST
+  workflow_dispatch:
 
 permissions:
-  contents: write                # ← これが超重要
+  contents: write
 
 jobs:
-  run:
+  crawl:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0         # 念のため完全履歴
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install deps
         run: pip install -r requirements.txt
 
       - name: Run scraper
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           python scrape.py
-          echo "--- AFTER SCRAPE ---"
+          echo '--- AFTER SCRAPE ---'
           ls -l docs || true
-          test -f docs/data.jsonl || (echo "data.jsonl 無いよ"; exit 1)
+          test -f docs/data.jsonl || { echo 'data.jsonl 無いよ'; exit 1; }
           wc -c docs/data.jsonl
-          head -n 3 docs/data.jsonl || true
-          # JSONLざっくり検証（1行目だけ）
-          python - << 'PY'
-import json,sys
-with open("docs/data.jsonl",encoding="utf-8") as f:
-    line=f.readline().strip()
-    if not line: sys.exit("data.jsonl が空です")
-    obj=json.loads(line)
-    need={'page_title','url','sections'}
-    if not need.issubset(obj):
-        sys.exit(f"フィールド不足: {need-obj.keys()}")
-print("JSONL 形式OK")
-PY
+          head -n 1 docs/data.jsonl || true
+          python -c "import json,sys; 
+s=open('docs/data.jsonl',encoding='utf-8').read().splitlines(); 
+l=s[0] if s else ''; 
+assert l, 'data.jsonl が空です'; 
+obj=json.loads(l); 
+need={'page_title','url','sections'}; 
+miss=need-set(obj); 
+assert not miss, f'フィールド不足: {miss}'; 
+print('JSONL 形式OK')"
 
       - name: Commit and push if changed
+        shell: bash
         run: |
-          git config user.name "auto-bot"
-          git config user.email "bot@example.com"
+          git config user.name 'auto-bot'
+          git config user.email 'bot@example.com'
           git add docs/data.jsonl
           if git diff --cached --quiet; then
-            echo "no changes"
+            echo 'no changes'
           else
             git commit -m "weekly refresh: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
             git push
