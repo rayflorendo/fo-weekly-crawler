@@ -1,11 +1,11 @@
 name: weekly-crawl
 on:
   schedule:
-    - cron: "0 0 * * 1"   # 毎週月曜(UTC) → JSTだと月曜09:00
-  workflow_dispatch: {}    # 手動実行ボタン
-
+    - cron: "0 0 * * 6"   # ← 毎週土曜 00:00 UTC = 土曜 09:00 JST
+  workflow_dispatch: {}    # 手動実行ボタン（そのままでOK）
+  
 permissions:
-  contents: write          # ← これ必須（git push で失敗しないため）
+  contents: write
 
 jobs:
   run:
