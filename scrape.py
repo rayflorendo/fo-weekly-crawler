@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-fo-weekly-crawler / scrape.py
-- 1ページ=1行の JSONL（data.jsonl）を生成
-- schema: "v2-sections" を付与（新フォーマットの目印）
-- header／.ft_custom01 を除去
-- id/class は保存せず、人間が読む「見出しテキスト」だけを sections[].heading に入れる
-- 追加のノイズ行も削除（"メインコンテンツへスキップ" 等）
-- タイトルは og:title > twitter:title > h1 > <title> > URL の優先順
-- URL は <link rel="canonical"> があればそれを採用
+fo-weekly-crawler / scrape.py  (safe-full)
+- 1ページ=1行 JSONL を docs/data.jsonl に出力
+- schema: "v2-sections"（新フォーマット目印）
+- <header> / <nav> / <footer> などを除去（※ .ft_custom01 はデフォルトで残す）
+- id/class は保存しない（見出しは人が読むテキストのみ）
+- 見出しの本文は「次の同格以上の見出し」までを next_elements で深く収集
+- もしセクション抽出で空になったら、ページ全体を丸ごと1セクションにフォールバック
 """
 
 import os
@@ -15,10 +14,10 @@ import re
 import json
 import time
 import urllib.parse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Iterable
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag, NavigableString
 import html2text
 
 URLS_PATH = "urls.csv"
@@ -31,7 +30,10 @@ UA = (
     "(KHTML, like Gecko) Chrome/123 Safari/537.36"
 )
 
-# サイト共通ノイズ（この行は捨てる）
+# ====== 調整ポイント ======
+REMOVE_FT_CUSTOM01 = False  # ← 最初は False。本文が無事取れるのを確認してから True でも可
+# =========================
+
 NOISE_LINES = {
     "メインコンテンツへスキップ",
     "検索を展開",
@@ -40,16 +42,13 @@ NOISE_LINES = {
     "テクニカルサポートへ問い合わせ",
 }
 
-# ページタイトル末尾のサイト名などを削る
 TITLE_SUFFIX_PATTERNS = [
     r"\s*\|\s*ferret One help center\s*$",
     r"\s*\|\s*FOガイドブック\s*$",
 ]
 
+HEADING_TAGS = ("h1", "h2", "h3")
 
-# ---------------------------
-#          Utils
-# ---------------------------
 
 def _clean_title(t: str) -> str:
     if not t:
@@ -61,12 +60,12 @@ def _clean_title(t: str) -> str:
 
 
 def _html2md(html: str) -> str:
-    """HTML→Markdown（ノイズ行削除）"""
     h = html2text.HTML2Text()
     h.ignore_links = False
     h.images_to_alt = True
     h.body_width = 0
     md = h.handle(html or "")
+
     lines: List[str] = []
     for line in md.splitlines():
         t = line.strip()
@@ -79,11 +78,13 @@ def _html2md(html: str) -> str:
 
 
 def _remove_globals(soup: BeautifulSoup) -> None:
-    """共通ヘッダー等を削除"""
-    for n in soup.find_all("header"):
-        n.decompose()
-    for n in soup.select("div.ft_custom01"):
-        n.decompose()
+    # 共通っぽい領域を削除（本文を巻き込まない程度に控えめ）
+    for sel in ["header", "nav", "footer", "script", "style"]:
+        for n in soup.find_all(sel):
+            n.decompose()
+    if REMOVE_FT_CUSTOM01:
+        for n in soup.select("div.ft_custom01"):
+            n.decompose()
 
 
 def _best_title(soup: BeautifulSoup, html: str, url: str) -> str:
@@ -105,22 +106,50 @@ def _best_title(soup: BeautifulSoup, html: str, url: str) -> str:
 def _canonical_url(soup: BeautifulSoup, url: str) -> str:
     link = soup.find("link", rel=lambda v: v and "canonical" in v.lower())
     if link and link.get("href"):
-        href = link["href"].strip()
-        return urllib.parse.urljoin(url, href)
+        return urllib.parse.urljoin(url, link["href"].strip())
     return url
 
 
+def _heading_level(tag: Tag) -> int:
+    # 'h1' -> 1, 'h2' -> 2, ...
+    return int(tag.name[1]) if tag and tag.name in HEADING_TAGS else 7
+
+
+def _collect_until_next_heading(h: Tag) -> str:
+    """
+    見出し h から次の「同格以上(h1/h2/h3)の見出し」が来るまで、
+    next_elements を辿って HTML を収集（深い入れ子も拾う）。
+    """
+    html_parts: List[str] = []
+    cur_level = _heading_level(h)
+    it = h.next_elements  # h の直後から DOM を深く辿る
+
+    for el in it:
+        if isinstance(el, Tag) and el.name in HEADING_TAGS:
+            # 次の見出しに到達。自分と同格以上なら終了
+            if _heading_level(el) <= cur_level:
+                break
+        if isinstance(el, Tag):
+            if el.name in ("script", "style", "header", "nav", "footer"):
+                continue
+            # 見出し自身は除外
+            if el.name in HEADING_TAGS:
+                continue
+            html_parts.append(str(el))
+        elif isinstance(el, NavigableString):
+            # テキストノードも拾う
+            text = str(el).strip()
+            if text:
+                html_parts.append(text)
+
+    return "".join(html_parts)
+
+
 def _fetch_html(url: str) -> str:
-    """単純GET（必要ならここにリトライを追加）"""
     r = requests.get(url, timeout=60, headers={"User-Agent": UA})
     r.raise_for_status()
-    # 一部サイトで charset が meta 指定のみの場合もあるが、requests が推測してくれる
     return r.text
 
-
-# ---------------------------
-#        Core logic
-# ---------------------------
 
 def fetch(url: str) -> Dict[str, Any]:
     html = _fetch_html(url)
@@ -130,29 +159,26 @@ def fetch(url: str) -> Dict[str, Any]:
     page_title = _best_title(soup, html, url)
     page_url = _canonical_url(soup, url)
 
-    # h1/h2/h3 でセクション分割（見出しテキストだけ採用）
-    headings = soup.select("h1, h2, h3")
     sections: List[Dict[str, str]] = []
+    headings = soup.select(",".join(HEADING_TAGS))
 
     if not headings:
-        # 見出しが無いページは全体を1セクションに
+        # 見出しが無い場合は全文を1セクションに
         sections.append({"heading": page_title, "content": _html2md(str(soup))})
     else:
         for h in headings:
-            heading_text = h.get_text(strip=True)  # ← id/class は使わない
-            contents: List[str] = []
-            node = h.next_sibling
-            # 次の見出しまでを本文として集める
-            while node and not (getattr(node, "name", None) in ["h1", "h2", "h3"]):
-                contents.append(str(node))
-                node = node.next_sibling
-            sec_html = str(h) + "".join(contents)
-            md = _html2md(sec_html)
+            heading_text = h.get_text(strip=True)
+            raw_html = _collect_until_next_heading(h)
+            md = _html2md(str(h) + raw_html)
             if md.strip():
                 sections.append({"heading": heading_text, "content": md})
 
+    # もし何らかの理由で空になったら、最終フォールバック
+    if not sections:
+        sections.append({"heading": page_title, "content": _html2md(str(soup))})
+
     return {
-        "schema": "v2-sections",             # ★ 新フォーマットの目印
+        "schema": "v2-sections",
         "page_title": page_title or page_url,
         "url": page_url,
         "sections": sections,
@@ -160,20 +186,18 @@ def fetch(url: str) -> Dict[str, Any]:
 
 
 def main() -> None:
-    # URLリストの読み込み
     if not os.path.exists(URLS_PATH):
         raise FileNotFoundError(f"{URLS_PATH} が見つかりません")
+
     with open(URLS_PATH, encoding="utf-8") as f:
         urls = [u.strip() for u in f if u.strip()]
 
-    # 生成
     with open(OUT_FILE, "w", encoding="utf-8") as out:
         for u in urls:
             print(f"[scrape] {u}", flush=True)
             try:
                 rec = fetch(u)
             except Exception as e:
-                # 失敗しても1行は出す（何が落ちたか後で追える）
                 rec = {
                     "schema": "v2-sections",
                     "url": u,
@@ -182,7 +206,7 @@ def main() -> None:
                     "sections": [],
                 }
             out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            time.sleep(1)  # 過負荷回避
+            time.sleep(1)
 
     print(f"OK -> {OUT_FILE}", flush=True)
 
