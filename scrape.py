@@ -1,5 +1,10 @@
-# ページのHTMLを「そのまま」Markdown化して保存
-import os, json, time, requests, re
+# -*- coding: utf-8 -*-
+# 指定URLを取得し、header と .ft_custom01 を除いた“ほぼ生テキスト”を Markdown に変換
+# 出力: docs/data.jsonl（1行1レコード）
+# フィールド: url, section, page, title, h1, headings, content_md
+
+import os, json, time, re, urllib.parse, requests
+from bs4 import BeautifulSoup
 import html2text
 
 URLS_PATH = "urls.csv"
@@ -9,40 +14,89 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
 
-def get_title(html: str, fallback: str) -> str:
-    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I|re.S)
-    if m: return re.sub(r"\s+", " ", m.group(1)).strip()
-    return fallback
+def to_md(html: str) -> str:
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.images_to_alt = True
+    h.body_width = 0  # 改行で折り返さない
+    md = h.handle(html or "")
+    # 余計な空行を軽く整える（内容は削らない）
+    return "\n".join([line.rstrip() for line in md.splitlines() if line.strip() != ""])
 
-def fetch_markdown(url: str) -> dict:
+def get_title_from_html(html: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()
+    return ""
+
+def guess_section_and_page(url: str) -> tuple[str, str]:
+    p = urllib.parse.urlparse(url)
+    parts = [s for s in p.path.split("/") if s]
+    section = parts[0] if parts else ""
+    page = parts[-1] if parts else ""
+    return section, page
+
+def remove_globals(soup: BeautifulSoup) -> None:
+    # 1) すべての <header> を除外
+    for node in soup.find_all("header"):
+        node.decompose()
+    # 2) クラスに ft_custom01 を含む div を除外（複数クラス対応）
+    def has_ft_custom01(cls):
+        if not cls: return False
+        if isinstance(cls, str): return "ft_custom01" in cls.split()
+        # class_ はlistになることもある
+        return "ft_custom01" in cls
+    for node in soup.find_all("div", class_=has_ft_custom01):
+        node.decompose()
+
+def extract_meta(soup: BeautifulSoup, html: str) -> tuple[str, str, list[str]]:
+    # h1
+    h1 = ""
+    h1_tag = soup.find("h1")
+    if h1_tag:
+        h1 = h1_tag.get_text(strip=True)
+    # h2/h3 見出し
+    headings = [t.get_text(strip=True) for t in soup.select("h2, h3")]
+    # title
+    title = h1 or get_title_from_html(html)
+    return title, h1, headings
+
+def fetch_record(url: str) -> dict:
     r = requests.get(url, timeout=60, headers={"User-Agent": UA})
     r.raise_for_status()
     html = r.text
-    # HTML → Markdown（要約なし・全文化）
-    h = html2text.HTML2Text()
-    h.ignore_links = False       # リンク残す
-    h.body_width = 0             # 折り返し無効（読みやすい）
-    h.images_to_alt = True       # 画像はaltを残す
-    md = h.handle(html)
-    title = get_title(html, url)
-    # 軽い整形（余計な空行を減らす）
-    md = "\n".join([line.rstrip() for line in md.splitlines() if line.strip() != ""])
-    return {"url": url, "title": title, "content": md}
+
+    soup = BeautifulSoup(html, "html.parser")
+    remove_globals(soup)  # header と .ft_custom01 を除外
+    title, h1, headings = extract_meta(soup, html)
+
+    # 省略・要約なしで全体（＝除外後のDOM全体）をMarkdown化
+    content_md = to_md(str(soup))
+
+    section, page = guess_section_and_page(url)
+
+    return {
+        "url": url,
+        "section": section,
+        "page": page,
+        "title": title or url,
+        "h1": h1,
+        "headings": headings,
+        "content_md": content_md,  # ← ChatGPTが読む本文（要約なし）
+    }
 
 def main():
     urls = [u.strip() for u in open(URLS_PATH, encoding="utf-8") if u.strip()]
-    rows = []
-    for u in urls:
-        try:
+    with open(OUT_FILE, "w", encoding="utf-8") as out:
+        for u in urls:
             print("fetch:", u, flush=True)
-            rows.append(fetch_markdown(u))
-            time.sleep(1)  # 優しめレート
-        except Exception as e:
-            rows.append({"url": u, "title": "(取得失敗)", "content": str(e)})
-    with open(OUT_FILE, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"OK: {len(rows)} pages -> {OUT_FILE}", flush=True)
+            try:
+                rec = fetch_record(u)
+            except Exception as e:
+                rec = {"url": u, "error": str(e)}
+            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            time.sleep(1)  # サーバに優しく
+    print(f"OK: {len(urls)} pages -> {OUT_FILE}", flush=True)
 
 if __name__ == "__main__":
     main()
