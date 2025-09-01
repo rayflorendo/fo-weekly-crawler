@@ -1,30 +1,58 @@
 name: weekly-crawl
+
 on:
   schedule:
-    - cron: "0 0 * * 6"   # ← 毎週土曜 00:00 UTC = 土曜 09:00 JST
-  workflow_dispatch: {}    # 手動実行ボタン（そのままでOK）
-  
+    - cron: "0 0 * * 6"         # 毎週土曜 00:00 UTC = 土曜 09:00 JST
+  workflow_dispatch: {}          # 手動実行
+
 permissions:
-  contents: write
+  contents: write                # ← これが超重要
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0         # 念のため完全履歴
+
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
 
-      # 依存を入れる
-      - run: pip install -r requirements.txt
+      - name: Install deps
+        run: pip install -r requirements.txt
 
-      # クロール＆変換
-      - run: python scrape.py
+      - name: Run scraper
+        run: |
+          set -e
+          python scrape.py
+          echo "--- AFTER SCRAPE ---"
+          ls -l docs || true
+          test -f docs/data.jsonl || (echo "data.jsonl 無いよ"; exit 1)
+          wc -c docs/data.jsonl
+          head -n 3 docs/data.jsonl || true
+          # JSONLざっくり検証（1行目だけ）
+          python - << 'PY'
+import json,sys
+with open("docs/data.jsonl",encoding="utf-8") as f:
+    line=f.readline().strip()
+    if not line: sys.exit("data.jsonl が空です")
+    obj=json.loads(line)
+    need={'page_title','url','sections'}
+    if not need.issubset(obj):
+        sys.exit(f"フィールド不足: {need-obj.keys()}")
+print("JSONL 形式OK")
+PY
 
-      # 生成物をコミット
-      - run: |
+      - name: Commit and push if changed
+        run: |
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
           git add docs/data.jsonl
-          git commit -m "weekly refresh" || echo "no changes"
-          git push
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "weekly refresh: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            git push
+          fi
