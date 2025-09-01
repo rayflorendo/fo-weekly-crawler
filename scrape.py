@@ -1,167 +1,121 @@
-import os, json, time, re, requests
-from typing import List, Dict, Any, Tuple
-from fastapi import FastAPI, Query, Header, HTTPException
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import linear_kernel
+# -*- coding: utf-8 -*-
+import os, json, time, re, urllib.parse, requests
+from bs4 import BeautifulSoup
+import html2text
 
-DATA_URL = os.getenv("DATA_URL")
-API_KEY  = os.getenv("API_KEY", "")
+URLS_PATH = "urls.csv"
+OUT_DIR   = "docs"
+OUT_FILE  = os.path.join(OUT_DIR, "data.jsonl")
+os.makedirs(OUT_DIR, exist_ok=True)
 
-app = FastAPI()
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
 
-# メモリ内の「仮想チャンク」構造
-# chunks[i] = {"page_idx": int, "page_url": str, "page_title": str,
-#              "subhead": str, "text": str}
-pages: List[Dict[str, Any]] = []
-chunks: List[Dict[str, Any]] = []
-vec, X, last = None, None, 0
+NOISE_LINES = {
+    "メインコンテンツへスキップ",
+    "検索を展開", "読み込み中",
+    "ferret One help center",
+    "テクニカルサポートへ問い合わせ",
+}
 
-# ---- ユーティリティ ----
-HEADING_PAT = re.compile(r'^(#{1,6}\s+|[0-9０-９]+\.\s+|[-•・]\s+|【.+?】)', re.MULTILINE)
+TITLE_SUFFIX_PATTERNS = [
+    r"\s*\|\s*ferret One help center\s*$",
+    r"\s*\|\s*FOガイドブック\s*$",
+]
 
-def split_into_virtual_chunks(title: str, url: str, md: str) -> List[Tuple[str,str]]:
-    """
-    1ページのMarkdownを「見出し or 空行 or 句点」でざっくり分割して
-    （保存形式を変えずに）仮想チャンクを返す。
-    戻り値: [(subhead, text), ...]
-    """
-    # まず大見出しっぽい位置で粗くスプリット
-    parts = HEADING_PAT.split(md)
-    # splitの結果は ["本文", "見出し記号", "見出し本文", "本文", ...] の交互になりがちなので整形
-    blocks: List[str] = []
-    buf = ""
-    for seg in parts:
-        if HEADING_PAT.match(seg or ""):
-            if buf.strip():
-                blocks.append(buf.strip())
-            buf = seg
-        else:
-            buf += ("\n" + seg) if seg else ""
-    if buf.strip():
-        blocks.append(buf.strip())
+def clean_title(t: str) -> str:
+    if not t: return ""
+    t = re.sub(r"\s+", " ", t).strip()
+    for pat in TITLE_SUFFIX_PATTERNS:
+        t = re.sub(pat, "", t, flags=re.I)
+    return t
 
-    # さらに大きすぎるブロックは空行や句点で小割り
-    out: List[Tuple[str,str]] = []
-    for b in blocks:
-        subhead = ""
-        lines = [ln for ln in b.splitlines() if ln.strip()]
-        if not lines:
-            continue
-        # 先頭行をサブ見出し候補に
-        subhead_candidate = lines[0].strip()
-        if len(subhead_candidate) <= 60:
-            subhead = subhead_candidate.lstrip("#-•・ ").strip()
+def html_to_md(html: str) -> str:
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.images_to_alt = True
+    h.body_width = 0
+    md = h.handle(html or "")
+    lines = []
+    for line in md.splitlines():
+        t = line.strip()
+        if not t: continue
+        if t in NOISE_LINES: continue
+        lines.append(line.rstrip())
+    return "\n".join(lines)
 
-        text = "\n".join(lines)
-        # 2000字超なら句点で小割り
-        if len(text) > 2000:
-            sentences = re.split(r"(?<=[。．!?])\s*", text)
-            cur = ""
-            for s in sentences:
-                if len(cur) + len(s) > 800:
-                    out.append((subhead, cur.strip()))
-                    cur = s
-                else:
-                    cur += s
-            if cur.strip():
-                out.append((subhead, cur.strip()))
-        else:
-            out.append((subhead, text))
-    # フォールバック
-    if not out:
-        out = [("", md[:1200])]
-    return out[:30]  # 1ページあたり最大30チャンクで十分
+def remove_globals(soup: BeautifulSoup) -> None:
+    for n in soup.find_all("header"):
+        n.decompose()
+    for n in soup.select("div.ft_custom01"):
+        n.decompose()
 
-def build_corpus_str(page_title: str, subhead: str, text: str) -> str:
-    # タイトル＆見出しを先頭に置いてブースト
-    head = " ".join([page_title or "", subhead or ""]).strip()
-    return (head + "\n" + text).strip()
+def best_title(soup, html, url) -> str:
+    m = soup.find("meta", property="og:title")
+    if m and m.get("content"): return clean_title(m["content"])
+    m = soup.find("meta", attrs={"name":"twitter:title"})
+    if m and m.get("content"): return clean_title(m["content"])
+    h1 = soup.find("h1")
+    if h1: return clean_title(h1.get_text(strip=True))
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I|re.S)
+    if m: return clean_title(m.group(1))
+    return url
 
-def refresh():
-    global pages, chunks, vec, X, last
-    if time.time()-last < 600 and chunks:
-        return
-    r = requests.get(DATA_URL, timeout=40); r.raise_for_status()
-    lines = [l for l in r.text.splitlines() if l.strip()]
-    raw = [json.loads(l) for l in lines]
+def canonical_url(soup, url) -> str:
+    link = soup.find("link", rel=lambda v: v and "canonical" in v.lower())
+    if link and link.get("href"):
+        return urllib.parse.urljoin(url, link["href"].strip())
+    return url
 
-    pages = []
-    chunks = []
-    for pi, d in enumerate(raw):
-        page_title = d.get("title") or d.get("display_title") or d.get("page") or d.get("url")
-        page_url   = d.get("display_url") or d.get("url")
-        md         = d.get("content_md") or d.get("html") or d.get("content") or ""
-        if not (page_url and md.strip()):
-            continue
-        pages.append({"title": page_title, "url": page_url})
-        # ここで “オンメモリ仮想チャンク化”
-        for subhead, text in split_into_virtual_chunks(page_title, page_url, md):
-            chunks.append({
-                "page_idx": pi,
-                "page_url": page_url,
-                "page_title": page_title,
-                "subhead": subhead,
-                "text": text
-            })
+def fetch(url: str) -> dict:
+    r = requests.get(url, timeout=60, headers={"User-Agent": UA})
+    r.raise_for_status()
+    html = r.text
+    soup = BeautifulSoup(html, "html.parser")
+    remove_globals(soup)
 
-    # 日本語に強い char n-gram
-    corpus = [build_corpus_str(c["page_title"], c["subhead"], c["text"]) for c in chunks]
-    vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(2,5), max_features=150000).fit(corpus)
-    X = vec.transform(corpus)
-    last = time.time()
+    page_title = best_title(soup, html, url)
+    page_url   = canonical_url(soup, url)
 
-def mmr(query_vec, X, top=12, lambda_div=0.5):
-    sims_q = linear_kernel(query_vec, X).ravel()
-    selected, cand = [], sims_q.argsort()[::-1].tolist()
-    while cand and len(selected) < top:
-        if not selected:
-            selected.append(cand.pop(0)); continue
-        best, best_i = -1e9, None
-        for idx, c in enumerate(cand[:200]):
-            sim_q = sims_q[c]
-            sim_red = max(linear_kernel(X[c], X[j]).ravel()[0] for j in selected)
-            score = lambda_div*sim_q - (1-lambda_div)*sim_red
-            if score > best:
-                best, best_i, best_idx = score, c, idx
-        selected.append(best_i); cand.pop(best_idx)
-    return selected
+    # 見出しでセクション分解（h1/h2/h3）
+    headings = soup.select("h1, h2, h3")
+    sections = []
 
-@app.get("/search")
-def search(q: str = Query(..., description="自然文でOK"),
-           top_k: int = 12,
-           diversity: float = 0.5,
-           authorization: str | None = Header(None),
-           key: str | None = Query(None)):
-    # 認証（?key= も可：ブラウザ検証用）
-    if API_KEY:
-        if not (authorization == f"Bearer {API_KEY}" or key == API_KEY):
-            raise HTTPException(401, "bad token")
-    refresh()
-    if not chunks:
-        return {"results": []}
+    if not headings:
+        sections.append({"heading": page_title, "content": html_to_md(str(soup))})
+    else:
+        # 見出しノードごとに「次の見出し直前まで」を本文として抽出
+        for i, h in enumerate(headings):
+            content_nodes = []
+            node = h.next_sibling
+            while node and not (getattr(node, "name", None) in ["h1","h2","h3"]):
+                content_nodes.append(str(node))
+                node = node.next_sibling
+            sec_html = str(h) + "".join(content_nodes)
+            md = html_to_md(sec_html)
+            if md.strip():
+                sections.append({
+                    "heading": h.get_text(strip=True),
+                    "content": md
+                })
 
-    qv = vec.transform([q])
-    cand = mmr(qv, X, top=min(max(top_k,1), 20), lambda_div=max(0.0, min(diversity,1.0)))
+    return {
+        "page_title": page_title or page_url,
+        "url": page_url,
+        "sections": sections
+    }
 
-    results = []
-    seen_pages = set()
-    for i in cand:
-        c = chunks[i]
-        # ページ単位での重複を軽く抑制（多様なソースを返す）
-        if c["page_url"] in seen_pages and len(results) >= 6:
-            continue
-        seen_pages.add(c["page_url"])
-        # 表示用タイトル：ページタイトル + サブ見出し
-        disp_title = c["page_title"]
-        if c["subhead"]:
-            disp_title = f"{disp_title}｜{c['subhead']}"  # GPTがそのまま表示
+def main():
+    urls = [u.strip() for u in open(URLS_PATH, encoding="utf-8") if u.strip()]
+    with open(OUT_FILE, "w", encoding="utf-8") as out:
+        for u in urls:
+            print("fetch:", u, flush=True)
+            try:
+                rec = fetch(u)
+            except Exception as e:
+                rec = {"url": u, "error": str(e), "page_title": "(取得失敗)", "sections": []}
+            out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            time.sleep(1)
+    print("OK ->", OUT_FILE, flush=True)
 
-        results.append({
-            "url": c["page_url"],                  # 実在保証のため #アンカーは付けない
-            "title": disp_title,                   # 表示用タイトル（改変禁止）
-            "snippet": c["text"][:700]             # 部分抜粋
-        })
-        if len(results) >= top_k:
-            break
-
-    return {"results": results}
+if __name__ == "__main__":
+    main()
