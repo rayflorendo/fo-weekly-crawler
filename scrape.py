@@ -10,6 +10,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36"
 
+# サイト共通のノイズ行を削除
 NOISE_LINES = {
     "メインコンテンツへスキップ",
     "検索を展開", "読み込み中",
@@ -76,15 +77,16 @@ def fetch(url: str) -> dict:
     page_title = best_title(soup, html, url)
     page_url   = canonical_url(soup, url)
 
-    # 見出しでセクション分解（h1/h2/h3）
+    # h1/h2/h3 見出しでセクション分割
     headings = soup.select("h1, h2, h3")
     sections = []
 
     if not headings:
         sections.append({"heading": page_title, "content": html_to_md(str(soup))})
     else:
-        # 見出しノードごとに「次の見出し直前まで」を本文として抽出
-        for i, h in enumerate(headings):
+        for h in headings:
+            # ❌ id/classは使わない → ✅ テキストだけ
+            heading_text = h.get_text(strip=True)
             content_nodes = []
             node = h.next_sibling
             while node and not (getattr(node, "name", None) in ["h1","h2","h3"]):
@@ -94,7 +96,7 @@ def fetch(url: str) -> dict:
             md = html_to_md(sec_html)
             if md.strip():
                 sections.append({
-                    "heading": h.get_text(strip=True),
+                    "heading": heading_text,   # ← id/classじゃなくテキストのみ
                     "content": md
                 })
 
