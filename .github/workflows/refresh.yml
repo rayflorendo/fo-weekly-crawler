@@ -1,8 +1,11 @@
 name: refresh-index
+
 on:
+  workflow_dispatch:   # ← 手動実行用トリガーを追加
   schedule:
     # 毎週土曜 12:00 JST (03:00 UTC)
     - cron: "0 3 * * 6"
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
