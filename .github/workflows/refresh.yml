@@ -1,0 +1,11 @@
+name: refresh-index
+on:
+  schedule:
+    # 毎週土曜 12:00 JST (03:00 UTC)
+    - cron: "0 3 * * 6"
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh Render index
+        run: curl -sSf -X POST "https://fo-search-api.onrender.com/refresh?key=${{ secrets.API_KEY }}"
