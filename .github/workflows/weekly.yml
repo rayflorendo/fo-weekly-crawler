@@ -1,8 +1,8 @@
+# .github/workflows/weekly.yml
 name: weekly-crawl
-
 on:
   schedule:
-    - cron: '0 0 * * 6'   # 毎週土曜 00:00 UTC = 土曜 09:00 JST
+    - cron: '0 18 * * 5'   # JST 土曜 03:00
   workflow_dispatch:
 
 permissions:
@@ -14,29 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install deps
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run scraper
-        run: |
-          python scrape.py
-          echo '--- AFTER SCRAPE ---'
-          ls -l docs || true
-          test -f docs/data.jsonl && echo 'data.jsonl OK' || (echo 'data.jsonl 無いよ'; exit 1)
+        run: python scrape.py
 
-      - name: Commit and push
+      - name: Commit & push if changed
         run: |
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
-          git add docs/data.jsonl
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "weekly refresh"
-            git push
-          fi
+          git add docs/data.json docs/data.jsonl || true
+          git diff --cached --quiet && echo "no changes" || git commit -m "chore: weekly data.json update"
+          git push
