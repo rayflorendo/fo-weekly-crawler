@@ -63,9 +63,15 @@ def fetch_html(url: str) -> str:
 def extract_title_and_text(html: str, url: str):
     soup = BeautifulSoup(html, "lxml")
 
-    # --- 共通ヘッダーを除去 ---
+    # --- 共通エリアを削除 ---
+    # <header> タグ
     for header in soup.find_all("header"):
         header.decompose()
+
+    # 特定の class を持つ div
+    for cls in ["ft_custom01", "breadcrumbs", "contents_row"]:
+        for div in soup.find_all("div", class_=cls):
+            div.decompose()
 
     # タイトル
     title = (soup.title.string if soup.title else "") or ""
@@ -74,11 +80,10 @@ def extract_title_and_text(html: str, url: str):
         h1 = soup.find("h1")
         title = (h1.get_text(strip=True) if h1 else "") or "記事の詳細"
 
-    # 本文テキスト（header削除後）
+    # 本文テキスト（不要部分削除後）
     text = normalize_text(soup.get_text("\n"))
 
     return {"title": title if title else "記事の詳細", "url": url, "html": text}
-
 
 def main():
     urls = load_urls(URLS_CSV)
