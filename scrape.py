@@ -1,3 +1,68 @@
+# 先頭に追加
+from bs4 import BeautifulSoup
+import re
+
+ALLOWED_TAGS = {
+    "h1","h2","h3","h4",
+    "p","ul","ol","li",
+    "table","thead","tbody","tr","th","td",
+    "pre","code","strong","em","a","br"
+}
+
+def clean_section_keep_headings(sec: BeautifulSoup) -> str:
+    # 不要タグは中身を残してタグだけ外す（script/style等は完全削除）
+    for tag in sec.find_all(["script","style","noscript","iframe"]):
+        tag.decompose()
+
+    # 余計なラッパーを剥がす（許可リスト以外のタグはunwrap）
+    for tag in sec.find_all(True):
+        if tag.name not in ALLOWED_TAGS:
+            tag.unwrap()
+
+    # aタグの長い属性などは不要なら消す（hrefだけ残す）
+    for a in sec.find_all("a"):
+        keep = a.get("href")
+        # すべての属性を消して href だけ残す
+        a.attrs = {}
+        if keep:
+            a["href"] = keep
+
+    # 連続改行を軽く整理（見やすさ用）
+    html = str(sec)
+    html = re.sub(r"\n{3,}", "\n\n", html).strip()
+    return html
+
+def extract_title_and_text(html: str, url: str):
+    soup = BeautifulSoup(html, "lxml")
+
+    # --- 共通パーツを削除 ---
+    for header in soup.find_all("header"):
+        header.decompose()
+    for cls in ["ft_custom01", "breadcrumbs", "contents_row"]:
+        for div in soup.find_all("div", class_=cls):
+            div.decompose()
+
+    # --- content-element の section のみ抽出 ---
+    sections = soup.find_all("section", class_="content-element")
+
+    if sections:
+        cleaned = [clean_section_keep_headings(sec) for sec in sections]
+        text_html = "\n\n".join(cleaned)
+    else:
+        # フォールバック：最低限 body を同様に整形
+        root = soup.body or soup
+        text_html = clean_section_keep_headings(root)
+
+    # タイトル
+    title = (soup.title.string if soup.title else "") or ""
+    title = title.strip() if title else ""
+    if not title:
+        h1 = soup.find("h1")
+        title = (h1.get_text(strip=True) if h1 else "") or "記事の詳細"
+
+    return {"title": title or "記事の詳細", "url": url, "html": text_html}
+
+
 # scrape.py
 import csv
 import json
