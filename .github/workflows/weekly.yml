@@ -1,9 +1,15 @@
 # .github/workflows/weekly.yml
 name: weekly-crawl
+
 on:
   schedule:
-    - cron: '0 18 * * 5'   # JST 土曜 03:00
+    - cron: '0 18 * * 5'   # JST 土曜 03:00 に自動実行
   workflow_dispatch:
+    inputs:
+      slack_channel_id:
+        description: "Slack channel ID to post result"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -32,3 +38,19 @@ jobs:
           git add docs/data.json docs/data.jsonl || true
           git diff --cached --quiet && echo "no changes" || git commit -m "chore: weekly data.json update"
           git push
+
+      # 手動実行（workflow_dispatch）のときだけ Slack に送信
+      - name: Post file to Slack
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_channel_id != '' }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack_channel_id }}
+        run: |
+          if [ ! -f docs/data.json ]; then
+            echo "docs/data.json not found"; exit 1
+          fi
+          curl -sS -F "channels=$SLACK_CHANNEL_ID" \
+               -F "initial_comment=最新の data.json をお届けします ☕️" \
+               -F "file=@docs/data.json" \
+               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+               https://slack.com/api/files.upload | jq .
