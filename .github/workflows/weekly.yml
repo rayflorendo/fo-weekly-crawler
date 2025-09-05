@@ -3,7 +3,7 @@ name: weekly-crawl
 
 on:
   schedule:
-    - cron: '0 18 * * 5'   # JST 土曜 03:00
+    - cron: '0 18 * * 5'   # JST 土曜 03:00 に自動実行
   workflow_dispatch:
     inputs:
       slack_user_id:
@@ -32,19 +32,25 @@ jobs:
         run: python scrape.py
 
       - name: Commit & push if changed
+        shell: bash
         run: |
+          set -e
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
           git add docs/data.json docs/data.jsonl || true
-          git diff --cached --quiet && echo "no changes" || git commit -m "chore: weekly data.json update"
-          git push
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore: weekly data.json update"
+            git push
+          fi
 
-      # 手動実行（Worker経由のworkflow_dispatch）のときだけDM送信
+      # Worker経由の手動実行時のみ、実行者へDMでファイル送付
       - name: DM file to requester
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_user_id != '' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.slack_user_id != '' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_USER_ID: ${{ inputs.slack_user_id }}
+          SLACK_USER_ID: ${{ github.event.inputs.slack_user_id }}
         shell: bash
         run: |
           set -e
