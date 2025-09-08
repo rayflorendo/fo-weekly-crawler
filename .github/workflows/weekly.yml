@@ -1,10 +1,9 @@
 # .github/workflows/weekly.yml
 name: weekly-crawl
-
 on:
   schedule:
-    - cron: '0 18 * * 5'   # JST 土曜 03:00 に自動実行
-  workflow_dispatch:       # 手動実行用（Slack連携なし）
+    - cron: '0 18 * * 5'   # JST 土曜 03:00
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -20,7 +19,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install deps
         run: pip install -r requirements.txt
 
       - name: Run scraper
@@ -31,9 +30,5 @@ jobs:
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
           git add docs/data.json docs/data.jsonl || true
-          if git diff --cached --quiet; then
-            echo "✅ no changes"
-          else
-            git commit -m "chore: weekly data.json update"
-            git push
-          fi
+          git diff --cached --quiet && echo "no changes" || git commit -m "chore: weekly data.json update"
+          git push
