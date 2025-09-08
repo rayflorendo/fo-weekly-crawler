@@ -4,12 +4,7 @@ name: weekly-crawl
 on:
   schedule:
     - cron: '0 18 * * 5'   # JST 土曜 03:00 に自動実行
-  workflow_dispatch:
-    inputs:
-      slack_user_id:
-        description: "Requester Slack user ID (for DM)"
-        required: false
-        type: string
+  workflow_dispatch:       # 手動実行用（Slack連携なし）
 
 permissions:
   contents: write
@@ -25,61 +20,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run scraper
         run: python scrape.py
 
       - name: Commit & push if changed
-        shell: bash
         run: |
-          set -e
           git config user.name "auto-bot"
           git config user.email "bot@example.com"
           git add docs/data.json docs/data.jsonl || true
           if git diff --cached --quiet; then
-            echo "no changes"
+            echo "✅ no changes"
           else
             git commit -m "chore: weekly data.json update"
             git push
           fi
-
-      # Worker経由の手動実行時のみ、実行者へDMでファイル送付
-      - name: DM file to requester
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.slack_user_id != '' }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_USER_ID: ${{ github.event.inputs.slack_user_id }}
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -f docs/data.json ]; then
-            echo "docs/data.json not found"; exit 1
-          fi
-
-          # DM用のIMチャネルを開く
-          OPEN_JSON="$(curl -sS -X POST https://slack.com/api/conversations.open \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "{\"users\":\"$SLACK_USER_ID\"}")"
-
-          # jqが無い環境もあるのでpythonで抽出
-          IM_CHANNEL="$(echo "$OPEN_JSON" | python - <<'PY'
-import sys, json
-data = json.load(sys.stdin)
-print(data.get("channel", {}).get("id", ""))
-PY
-)"
-          if [ -z "$IM_CHANNEL" ]; then
-            echo "Failed to open DM channel: $OPEN_JSON"
-            exit 1
-          fi
-
-          # ファイルをDMに添付 + 完了メッセージ
-          curl -sS -F "channels=$IM_CHANNEL" \
-               -F "initial_comment=お待たせしました！最新のGPTs用ファイルです🎉" \
-               -F "file=@docs/data.json" \
-               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-               https://slack.com/api/files.upload
