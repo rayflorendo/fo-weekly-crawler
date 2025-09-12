@@ -16,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0                # push 周りの不具合を避ける
+          fetch-depth: 0
           persist-credentials: true
 
       - name: Setup Python
@@ -34,11 +34,13 @@ jobs:
         shell: bash
         run: |
           set -e
-          test -f docs/data.json || (echo "❌ docs/data.json がありません" && exit 1)
-          size=$(wc -c < docs/data.json | tr -d ' ')
-          echo "📄 docs/data.json size: ${size} bytes"
+          test -f docs/fo-manual.json || (echo "❌ fo-manual.json がありません" && exit 1)
+          test -f docs/js-part.json || (echo "❌ js-part.json がありません" && exit 1)
+          size_fo=$(wc -c < docs/fo-manual.json | tr -d ' ')
+          size_js=$(wc -c < docs/js-part.json | tr -d ' ')
+          echo "📄 fo-manual.json size: ${size_fo} bytes"
+          echo "📄 js-part.json size: ${size_js} bytes"
 
-      # ここで「差分がなくてもコミット」を強制する
       - name: Commit & push (even if no diff)
         shell: bash
         run: |
@@ -46,15 +48,14 @@ jobs:
           git config user.name  "auto-bot"
           git config user.email "bot@example.com"
 
-          # まず通常の変更をステージ
-          git add docs/data.json docs/data.jsonl || true
+          # 修正ポイント：出力ファイルを追加
+          git add docs/fo-manual.json docs/js-part.json docs/.gitkeep || true
 
           if git diff --cached --quiet; then
             echo "⚠️ 変化はありませんでしたが、更新扱いの空コミットを作ります"
             git commit --allow-empty -m "chore: weekly refresh (no content change)"
           else
-            git commit -m "chore: weekly data.json update"
+            git commit -m "chore: weekly fo/js data update"
           fi
 
-          # 現在のブランチへ明示的に push（手動実行でも安全）
           git push origin HEAD:${GITHUB_REF_NAME:-main}
