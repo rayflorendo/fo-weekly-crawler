@@ -68,11 +68,9 @@ def fetch_html(url: str) -> str:
 def clean_section_keep_headings(sec: BeautifulSoup) -> str:
     """section要素内をクリーンアップし、見出し等の最低限のタグは保持してHTMLとして返す。"""
 
-    # 完全削除対象
     for tag in sec.find_all(["script", "style", "noscript", "iframe"]):
         tag.decompose()
 
-    # <a>以外の属性を基本削除
     for tag in sec.find_all(True):
         if tag.name == "a":
             href = tag.get("href")
@@ -82,28 +80,26 @@ def clean_section_keep_headings(sec: BeautifulSoup) -> str:
         else:
             tag.attrs = {}
 
-    # unwrap対象のタグ（ただし <code> タグは除外）
+    # unwrap処理（<code>を守るため、親に含まれていたらunwrapしない）
     for tag in list(sec.find_all(True)):
         if tag.name not in ALLOWED_TAGS:
-            # 子孫に <code> を含んでいたら unwrap しない
-            if tag.find("code"):
+            if tag.find("code"):  # 子孫に <code> を含んでいたら unwrap しない
                 continue
             tag.unwrap()
 
     html = str(sec)
     return normalize_text(html)
 
+
 def extract_title_and_text(html: str, url: str):
     soup = BeautifulSoup(html, "lxml")
 
-    # 共通UI除去
     for header in soup.find_all("header"):
         header.decompose()
     for cls in ["ft_custom01", "breadcrumbs", "contents_row"]:
         for div in soup.find_all("div", class_=cls):
             div.decompose()
 
-    # メインセクション抽出
     sections = soup.find_all("section", class_="content-element")
     if sections:
         cleaned = [clean_section_keep_headings(sec) for sec in sections]
