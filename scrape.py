@@ -72,7 +72,7 @@ def clean_section_keep_headings(sec: BeautifulSoup) -> str:
     for tag in sec.find_all(["script", "style", "noscript", "iframe"]):
         tag.decompose()
 
-    # <a>以外の属性は基本落とす
+    # <a>以外の属性を基本削除
     for tag in sec.find_all(True):
         if tag.name == "a":
             href = tag.get("href")
@@ -82,16 +82,16 @@ def clean_section_keep_headings(sec: BeautifulSoup) -> str:
         else:
             tag.attrs = {}
 
-    # ✅ <code> タグは常に残す
+    # unwrap対象のタグ（ただし <code> タグは除外）
     for tag in list(sec.find_all(True)):
         if tag.name not in ALLOWED_TAGS:
-            if tag.name == "code":
-                continue  # 常に残す
+            # 子孫に <code> を含んでいたら unwrap しない
+            if tag.find("code"):
+                continue
             tag.unwrap()
 
     html = str(sec)
     return normalize_text(html)
-
 
 def extract_title_and_text(html: str, url: str):
     soup = BeautifulSoup(html, "lxml")
