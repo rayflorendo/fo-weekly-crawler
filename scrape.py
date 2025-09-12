@@ -1,4 +1,3 @@
-# scrape.py
 import csv
 import json
 import os
@@ -69,11 +68,9 @@ def fetch_html(url: str) -> str:
 def clean_section_keep_headings(sec: BeautifulSoup) -> str:
     """section要素内をクリーンアップし、見出し等の最低限のタグは保持してHTMLとして返す。"""
 
-    # 完全削除対象
     for tag in sec.find_all(["script", "style", "noscript", "iframe"]):
         tag.decompose()
 
-    # <a>以外の属性は基本落とす（安全＆軽量化）
     for tag in sec.find_all(True):
         if tag.name == "a":
             href = tag.get("href")
@@ -83,16 +80,16 @@ def clean_section_keep_headings(sec: BeautifulSoup) -> str:
         else:
             tag.attrs = {}
 
-    # <div class="code_row"> 内の <code> は一時保護対象とする
-    protected_code_tags = set()
+    # --- ✅ <div class="code_row"> 内の <code> は保護する ---
+    protected_code_ids = set()
     for div in sec.find_all("div", class_="code_row"):
-        protected_code_tags.update(div.find_all("code"))
+        for code_tag in div.find_all("code"):
+            protected_code_ids.add(id(code_tag))
 
-    # ホワイトリスト外のタグは unwrap（ただし除外条件付き）
     for tag in list(sec.find_all(True)):
         if tag.name not in ALLOWED_TAGS:
-            if tag.name == "code" and tag in protected_code_tags:
-                continue  # 例外的に残す
+            if tag.name == "code" and id(tag) in protected_code_ids:
+                continue  # 例外：code_row内のcodeタグは残す
             tag.unwrap()
 
     html = str(sec)
@@ -164,6 +161,7 @@ def main():
 
     with open("docs/fo-manual.json", "w", encoding="utf-8") as f:
         json.dump(results_fo, f, ensure_ascii=False, indent=2)
+
     with open("docs/js-part.json", "w", encoding="utf-8") as f:
         json.dump(results_js, f, ensure_ascii=False, indent=2)
 
