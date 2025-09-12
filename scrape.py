@@ -68,9 +68,11 @@ def fetch_html(url: str) -> str:
 def clean_section_keep_headings(sec: BeautifulSoup) -> str:
     """section要素内をクリーンアップし、見出し等の最低限のタグは保持してHTMLとして返す。"""
 
+    # 完全削除対象
     for tag in sec.find_all(["script", "style", "noscript", "iframe"]):
         tag.decompose()
 
+    # 属性の削除（<a> だけ href を残す）
     for tag in sec.find_all(True):
         if tag.name == "a":
             href = tag.get("href")
@@ -80,11 +82,12 @@ def clean_section_keep_headings(sec: BeautifulSoup) -> str:
         else:
             tag.attrs = {}
 
-    # unwrap処理（<code>を守るため、親に含まれていたらunwrapしない）
+    # unwrap処理（ただし .code_row クラスがあるタグは除外）
     for tag in list(sec.find_all(True)):
         if tag.name not in ALLOWED_TAGS:
-            if tag.find("code"):  # 子孫に <code> を含んでいたら unwrap しない
-                continue
+            classes = tag.get("class") or []
+            if "code_row" in classes:
+                continue  # ✅ .code_row クラス付きはそのまま残す
             tag.unwrap()
 
     html = str(sec)
